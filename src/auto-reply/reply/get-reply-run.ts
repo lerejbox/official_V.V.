@@ -43,7 +43,6 @@ import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
-import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -290,7 +289,25 @@ export async function runPreparedReply(
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  const baseBodyFinal = isBareSessionReset ? buildBareSessionResetPrompt(cfg) : baseBody;
+  if (isBareSessionReset) {
+    if (command.isAuthorizedSender) {
+      await sendResetSessionNotice({
+        ctx,
+        command,
+        sessionKey,
+        cfg,
+        accountId: ctx.AccountId,
+        threadId: ctx.MessageThreadId,
+        provider,
+        model,
+        defaultProvider,
+        defaultModel,
+      });
+    }
+    typing.cleanup();
+    return undefined;
+  }
+  const baseBodyFinal = baseBody;
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
       ? {

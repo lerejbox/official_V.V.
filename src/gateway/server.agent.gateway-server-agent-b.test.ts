@@ -272,7 +272,7 @@ describe("gateway server agent", () => {
     expectAgentRoutingCall({ channel: "webchat", deliver: false });
   });
 
-  test("agent routes bare /new through session reset before running greeting prompt", async () => {
+  test("agent routes bare /new through session reset without running a greeting prompt", async () => {
     await writeMainSessionEntry({ sessionId: "sess-main-before-reset" });
     const spy = vi.mocked(agentCommand);
     const calls = spy.mock.calls as unknown[][];
@@ -284,13 +284,8 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore));
-    const call = (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>;
-    expect(call.message).toBeTypeOf("string");
-    expect(call.message).toContain("Execute your Session Startup sequence now");
-    expect(call.message).toContain("Current time:");
-    expect(typeof call.sessionId).toBe("string");
-    expect(call.sessionId).not.toBe("sess-main-before-reset");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls.length).toBe(callsBefore);
   });
 
   test("write-scoped callers cannot use sessions.reset directly but can still reset conversations via agent", async () => {
@@ -334,10 +329,8 @@ describe("gateway server agent", () => {
       expect(store["agent:main:main"]?.sessionId).toBeDefined();
       expect(store["agent:main:main"]?.sessionId).not.toBe("sess-main-before-write-reset");
 
-      await vi.waitFor(() => expect(vi.mocked(agentCommand)).toHaveBeenCalled());
-      const call = readAgentCommandCall();
-      expect(typeof call.sessionId).toBe("string");
-      expect(call.sessionId).not.toBe("sess-main-before-write-reset");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
 
       writeWs.close();
     });

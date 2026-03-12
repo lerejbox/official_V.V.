@@ -208,6 +208,32 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
+  it("skips the agent greeting for bare /new and only sends the reset notice", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "slack",
+        },
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
+      | { payload?: { text?: string } }
+      | undefined;
+    expect(resetNoticeCall?.payload?.text).toContain("✅ New session started · model:");
+  });
+
   it("omits auth key labels from /new and /reset confirmation messages", async () => {
     await runPreparedReply(
       baseParams({

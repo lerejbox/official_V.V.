@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -564,10 +563,11 @@ describe("gateway agent handler", () => {
     expect(capturedStore?.["agent:main:MAIN"]).toBeUndefined();
   });
 
-  it("handles bare /new by resetting the same session and sending reset greeting prompt", async () => {
+  it("handles bare /new by resetting the same session without spawning a greeting turn", async () => {
     mockSessionResetSuccess({ reason: "new" });
 
     primeMainAgentRun({ sessionId: "reset-session-id" });
+    const agentCallsBefore = mocks.agentCommand.mock.calls.length;
 
     await invokeAgent(
       {
@@ -578,14 +578,8 @@ describe("gateway agent handler", () => {
       { reqId: "4" },
     );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-    const call = readLastAgentCommandCall();
-    // Message is now dynamically built with current date — check key substrings
-    expect(call?.message).toContain("Execute your Session Startup sequence now");
-    expect(call?.message).toContain("Current time:");
-    expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
-    expect(call?.sessionId).toBe("reset-session-id");
+    expect(mocks.agentCommand.mock.calls.length).toBe(agentCallsBefore);
   });
 
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {

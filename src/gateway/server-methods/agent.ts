@@ -5,7 +5,6 @@ import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
-import { buildBareSessionResetPrompt } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -313,6 +312,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
     let resolvedSessionKey = requestedSessionKey;
     let skipTimestampInjection = false;
+    let skipDispatch = false;
 
     const resetCommandMatch = message.match(RESET_COMMAND_RE);
     if (resetCommandMatch && requestedSessionKey) {
@@ -331,12 +331,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (postResetMessage) {
         message = postResetMessage;
       } else {
-        // Keep bare /new and /reset behavior aligned with chat.send:
-        // reset first, then run a fresh-session greeting prompt in-place.
-        // Date is embedded in the prompt so agents read the correct daily
-        // memory files; skip further timestamp injection to avoid duplication.
-        message = buildBareSessionResetPrompt(cfg);
+        // Bare /new and /reset should reset the conversation without spending
+        // a model turn on an auto-greeting. Return the reset ack only.
+        message = "";
         skipTimestampInjection = true;
+        skipDispatch = true;
       }
     }
 
@@ -582,6 +581,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       },
     });
     respond(true, accepted, undefined, { runId });
+
+    if (skipDispatch) {
+      return;
+    }
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
