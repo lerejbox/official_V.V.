@@ -409,7 +409,7 @@ export async function runPreparedReply(
       }
     }
   }
-  if (resetTriggered && command.isAuthorizedSender) {
+  if ((resetTriggered || isNewSession) && command.isAuthorizedSender) {
     await sendResetSessionNotice({
       ctx,
       command,

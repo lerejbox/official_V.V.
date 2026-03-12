@@ -224,6 +224,20 @@ describe("runPreparedReply media-only handling", () => {
     expect(resetNoticeCall?.payload?.text).not.toContain("env:");
   });
 
+  it("sends the startup notice for authorized fresh sessions", async () => {
+    await runPreparedReply(
+      baseParams({
+        isNewSession: true,
+        resetTriggered: false,
+      }),
+    );
+
+    const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
+      | { payload?: { text?: string } }
+      | undefined;
+    expect(resetNoticeCall?.payload?.text).toContain("✅ New session started · model:");
+  });
+
   it("skips reset notice when only webchat fallback routing is available", async () => {
     await runPreparedReply(
       baseParams({
