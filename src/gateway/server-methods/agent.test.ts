@@ -606,6 +606,30 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("uses /new suffix as the post-reset message and still injects timestamp", async () => {
+    setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
+    mockSessionResetSuccess({ reason: "new" });
+    mocks.performGatewaySessionReset.mockClear();
+    primeMainAgentRun({
+      sessionId: "reset-session-id",
+      cfg: mocks.loadConfigReturn,
+    });
+
+    await invokeAgent(
+      {
+        message: "/new check status",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-new-suffix",
+      },
+      { reqId: "4c" },
+    );
+
+    const call = await expectResetCall("[Wed 2026-01-28 20:30 EST] check status");
+    expect(call?.sessionId).toBe("reset-session-id");
+
+    resetTimeConfig();
+  });
+
   it("rejects malformed agent session keys early in agent handler", async () => {
     mocks.agentCommand.mockClear();
     const respond = await invokeAgent(

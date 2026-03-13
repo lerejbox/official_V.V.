@@ -264,6 +264,23 @@ describe("runPreparedReply media-only handling", () => {
     expect(resetNoticeCall?.payload?.text).toContain("✅ New session started · model:");
   });
 
+  it("does not send the startup notice for unauthorized fresh sessions", async () => {
+    await runPreparedReply(
+      baseParams({
+        isNewSession: true,
+        resetTriggered: false,
+        command: {
+          isAuthorizedSender: false,
+          abortKey: "session-key",
+          ownerList: [],
+          senderIsOwner: false,
+        } as never,
+      }),
+    );
+
+    expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
+  });
+
   it("skips reset notice when only webchat fallback routing is available", async () => {
     await runPreparedReply(
       baseParams({
