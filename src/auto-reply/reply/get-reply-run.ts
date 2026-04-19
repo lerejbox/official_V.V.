@@ -4,7 +4,6 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
-import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -15,11 +14,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
-import {
-  isAcpSessionKey,
-  isSubagentSessionKey,
-  normalizeMainKey,
-} from "../../routing/session-key.js";
+import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
@@ -48,10 +43,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptBodies } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
-import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
-import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
-import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -325,40 +317,18 @@ export async function runPreparedReply(
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  const startupAction = /^\/reset(?:\s|$)/.test(normalizedCommandBody) ? "reset" : "new";
-  const spawnedWorkspaceOverride = resolveIngressWorkspaceOverrideForSpawnedRun({
-    spawnedBy: sessionEntry?.spawnedBy,
-    workspaceDir: sessionEntry?.spawnedWorkspaceDir,
-  });
-  const bareResetPromptState =
-    isBareSessionReset && workspaceDir
-      ? await resolveBareSessionResetPromptState({
-          cfg,
-          workspaceDir,
-          isPrimaryRun: !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey),
-          isCanonicalWorkspace: !spawnedWorkspaceOverride,
-          hasBootstrapFileAccess: resolveBareResetBootstrapFileAccess({
-            cfg,
-            agentId,
-            sessionKey,
-            workspaceDir,
-            modelProvider: provider,
-            modelId: model,
-          }),
-        })
-      : null;
-  const startupContextPrelude =
-    isBareSessionReset &&
-    bareResetPromptState?.shouldPrependStartupContext !== false &&
-    shouldApplyStartupContext({ cfg, action: startupAction })
-      ? await buildSessionStartupContextPrelude({
-          workspaceDir,
-          cfg,
-        })
-      : null;
-  const baseBodyFinal = isBareSessionReset
-    ? (bareResetPromptState?.prompt ?? "")
-    : stripPromptThinkingDirectives(baseBody);
+  // Bare /new and /reset should NOT spawn a model turn. Return a deterministic
+  // notice instead, saving ~20k+ tokens per reset.
+  if (isBareSessionReset) {
+    if (command.isAuthorizedSender) {
+      const modelLabel = provider && model ? `${provider}/${model}` : model || "unknown";
+      typing.cleanup();
+      return { text: `✅ New session started · model: ${modelLabel}` };
+    }
+    typing.cleanup();
+    return undefined;
+  }
+  const baseBodyFinal = stripPromptThinkingDirectives(baseBody);
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
@@ -371,9 +341,7 @@ export async function runPreparedReply(
       : { ...sessionCtx, ThreadStarterBody: undefined },
     envelopeOptions,
   );
-  const baseBodyForPrompt = isBareSessionReset
-    ? [startupContextPrelude, baseBodyFinal].filter(Boolean).join("\n\n")
-    : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+  const baseBodyForPrompt = [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
   const hasUserBody = baseBodyFinal.trim().length > 0;
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),

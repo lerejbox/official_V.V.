@@ -5,14 +5,7 @@ import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
 } from "../../agents/spawned-context.js";
-import {
-  resolveBareResetBootstrapFileAccess,
-  resolveBareSessionResetPromptState,
-} from "../../auto-reply/reply/session-reset-prompt.js";
-import {
-  buildSessionStartupContextPrelude,
-  shouldApplyStartupContext,
-} from "../../auto-reply/reply/startup-context.js";
+import { buildSessionStartupContextPrelude } from "../../auto-reply/reply/startup-context.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -32,12 +25,7 @@ import {
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import {
-  classifySessionKeyShape,
-  isAcpSessionKey,
-  isSubagentSessionKey,
-  normalizeAgentId,
-} from "../../routing/session-key.js";
+import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -527,6 +515,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let isNewSession = false;
     let skipTimestampInjection = false;
     let shouldPrependStartupContext = false;
+    let skipDispatch = false;
 
     const resetCommandMatch = message.match(RESET_COMMAND_RE);
     if (resetCommandMatch && requestedSessionKey) {
@@ -554,54 +543,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (postResetMessage) {
         message = postResetMessage;
       } else {
-        const resetLoadedSession = loadSessionEntry(requestedSessionKey);
-        const resetCfg = resetLoadedSession?.cfg ?? cfg;
-        const resetSessionEntry = resetLoadedSession?.entry;
-        const resetSpawnedBy = canonicalizeSpawnedByForAgent(
-          resetCfg,
-          resolveAgentIdFromSessionKey(requestedSessionKey),
-          resetSessionEntry?.spawnedBy,
-        );
-        const { runtimeWorkspaceDir, isCanonicalWorkspace } = resolveSessionRuntimeWorkspace({
-          cfg: resetCfg,
-          sessionKey: requestedSessionKey,
-          sessionEntry: resetSessionEntry,
-          spawnedBy: resetSpawnedBy,
-        });
-        const resetSessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKey);
-        const resetBaseModelRef = resolveSessionModelRef(
-          resetCfg,
-          resetSessionEntry,
-          resetSessionAgentId,
-        );
-        const resetEffectiveModelRef = {
-          provider: providerOverride || resetBaseModelRef.provider,
-          model: modelOverride || resetBaseModelRef.model,
-        };
-        const bareResetPromptState = await resolveBareSessionResetPromptState({
-          cfg: resetCfg,
-          workspaceDir: runtimeWorkspaceDir,
-          isPrimaryRun:
-            !isSubagentSessionKey(requestedSessionKey) && !isAcpSessionKey(requestedSessionKey),
-          isCanonicalWorkspace,
-          hasBootstrapFileAccess: resolveBareResetBootstrapFileAccess({
-            cfg: resetCfg,
-            agentId: resetSessionAgentId,
-            sessionKey: requestedSessionKey,
-            workspaceDir: runtimeWorkspaceDir,
-            modelProvider: resetEffectiveModelRef.provider,
-            modelId: resetEffectiveModelRef.model,
-          }),
-        });
-        // Keep bare /new and /reset behavior aligned with chat.send:
-        // reset first, then run a fresh-session greeting prompt in-place.
-        // Date is embedded in the prompt so agents read the correct daily
-        // memory files; skip further timestamp injection to avoid duplication.
-        message = bareResetPromptState.prompt;
+        // Bare /new and /reset should reset the conversation without spending
+        // a model turn on an auto-greeting. Skip the dispatch entirely.
+        message = "";
         skipTimestampInjection = true;
-        shouldPrependStartupContext =
-          bareResetPromptState.shouldPrependStartupContext &&
-          shouldApplyStartupContext({ cfg, action: resetReason });
+        skipDispatch = true;
       }
     }
 
@@ -911,6 +857,10 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+
+    if (skipDispatch) {
+      return;
+    }
 
     dispatchAgentRunFromGateway({
       ingressOpts: {

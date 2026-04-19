@@ -337,6 +337,38 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
+  it("skips the agent greeting for bare /new and returns a deterministic notice", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "slack",
+        },
+        command: {
+          surface: "slack",
+          channel: "slack",
+          isAuthorizedSender: true,
+          abortKey: "session-key",
+          ownerList: [],
+          senderIsOwner: false,
+          rawBodyNormalized: "/new",
+          commandBodyNormalized: "/new",
+        } as never,
+      }),
+    );
+
+    expect(result).toEqual({ text: "✅ New session started · model: anthropic/claude-opus-4-1" });
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
   it("does not send a standalone reset notice for reply-producing /new turns", async () => {
     await runPreparedReply(
       baseParams({
