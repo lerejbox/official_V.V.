@@ -1,5 +1,11 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import {
+  getDetachedTaskLifecycleRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { agentHandlers } from "./agent.js";
@@ -326,6 +332,7 @@ describe("gateway agent handler", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
+    resetDetachedTaskLifecycleRuntimeForTests();
     resetTaskRegistryForTests();
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
   });
@@ -989,6 +996,49 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("dispatches async gateway agent task creation through the detached task runtime seam", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-seam-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+
+      const defaultRuntime = getDetachedTaskLifecycleRuntime();
+      const createRunningTaskRunSpy = vi.fn(
+        (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
+          defaultRuntime.createRunningTaskRun(...args),
+      );
+
+      setDetachedTaskLifecycleRuntime({
+        ...defaultRuntime,
+        createRunningTaskRun: createRunningTaskRunSpy,
+      });
+
+      await invokeAgent(
+        {
+          message: "background cli seam task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-seam",
+        },
+        { reqId: "task-registry-agent-seam" },
+      );
+
+      expect(createRunningTaskRunSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: "cli",
+          runId: "task-registry-agent-seam",
+          childSessionKey: "agent:main:main",
+          sourceId: "task-registry-agent-seam",
+          task: expect.stringContaining("background cli seam task"),
+        }),
+      );
+      expect(findTaskByRunId("task-registry-agent-seam")).toMatchObject({
+        runtime: "cli",
+        childSessionKey: "agent:main:main",
+        status: "running",
+      });
+    });
+  });
+
   it("handles missing cliSessionIds gracefully", async () => {
     mockMainSessionEntry({});
 
@@ -1043,12 +1093,10 @@ describe("gateway agent handler", () => {
     expect(capturedStore?.["agent:main:MAIN"]).toBeUndefined();
   });
 
-  it("handles bare /new by resetting the same session without spawning a greeting turn", async () => {
+  it("handles bare /new by resetting the same session and sending reset greeting prompt", async () => {
     mockSessionResetSuccess({ reason: "new" });
-    mocks.performGatewaySessionReset.mockClear();
 
     primeMainAgentRun({ sessionId: "reset-session-id" });
-    const agentCallsBefore = mocks.agentCommand.mock.calls.length;
 
     await invokeAgent(
       {
@@ -1062,15 +1110,22 @@ describe("gateway agent handler", () => {
       },
     );
 
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-    // No agent run should be dispatched for bare resets
-    expect(mocks.agentCommand.mock.calls.length).toBe(agentCallsBefore);
+    const call = readLastAgentCommandCall();
+    // Message is now dynamically built with current date — check key substrings
+    expect(call?.message).toContain("Execute your Session Startup sequence now");
+    expect(call?.message).toContain("Current time:");
+    expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
+    expect(call?.sessionId).toBe("reset-session-id");
   });
 
-  it("does not dispatch an agent run for bare /new with startup memory", async () => {
+  it("prepends runtime-loaded startup memory to bare /new agent runs", async () => {
     await withTempDir({ prefix: "openclaw-gateway-reset-startup-" }, async (workspaceDir) => {
       await fs.mkdir(`${workspaceDir}/memory`, { recursive: true });
       await fs.writeFile(`${workspaceDir}/memory/2026-01-28.md`, "today gateway note", "utf-8");
+      await fs.writeFile(`${workspaceDir}/memory/2026-01-27.md`, "yesterday gateway note", "utf-8");
+      setupNewYorkTimeConfig("2026-01-28T20:30:00.000Z");
       mocks.loadConfigReturn = {
         agents: {
           defaults: {
@@ -1080,9 +1135,7 @@ describe("gateway agent handler", () => {
         },
       };
       mockSessionResetSuccess({ reason: "new" });
-      mocks.performGatewaySessionReset.mockClear();
       primeMainAgentRun({ sessionId: "reset-session-id", cfg: mocks.loadConfigReturn });
-      const agentCallsBefore = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -1096,12 +1149,18 @@ describe("gateway agent handler", () => {
         },
       );
 
-      expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-      expect(mocks.agentCommand.mock.calls.length).toBe(agentCallsBefore);
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+      const call = readLastAgentCommandCall();
+      expect(call?.message).toContain("[Startup context loaded by runtime]");
+      expect(call?.message).toContain("[Untrusted daily memory: memory/2026-01-28.md]");
+      expect(call?.message).toContain("today gateway note");
+      expect(call?.message).toContain("[Untrusted daily memory: memory/2026-01-27.md]");
+      expect(call?.message).toContain("yesterday gateway note");
+      resetTimeConfig();
     });
   });
 
-  it("does not dispatch an agent run for bare /new when workspace bootstrap is pending", async () => {
+  it("uses shared bootstrap reset wording for bare /new when workspace bootstrap is pending", async () => {
     await withTempDir({ prefix: "openclaw-gateway-reset-bootstrap-" }, async (workspaceDir) => {
       await fs.writeFile(`${workspaceDir}/BOOTSTRAP.md`, "bootstrap ritual", "utf-8");
       mocks.loadConfigReturn = {
@@ -1112,9 +1171,7 @@ describe("gateway agent handler", () => {
         },
       };
       mockSessionResetSuccess({ reason: "new" });
-      mocks.performGatewaySessionReset.mockClear();
       primeMainAgentRun({ sessionId: "reset-session-id", cfg: mocks.loadConfigReturn });
-      const agentCallsBefore = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -1128,12 +1185,15 @@ describe("gateway agent handler", () => {
         },
       );
 
-      expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-      expect(mocks.agentCommand.mock.calls.length).toBe(agentCallsBefore);
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+      const call = readLastAgentCommandCall();
+      expect(call?.message).toContain("while bootstrap is still pending for this workspace");
+      expect(call?.message).toContain("Please read BOOTSTRAP.md from the workspace now");
+      expect(call?.message).not.toContain("Today memory context");
     });
   });
 
-  it("does not dispatch an agent run for bare /new from spawned workspace", async () => {
+  it("resolves bare /new bootstrap state from the effective spawned workspace", async () => {
     await withTempDir(
       { prefix: "openclaw-gateway-reset-default-" },
       async (defaultWorkspaceDir) => {
@@ -1149,8 +1209,22 @@ describe("gateway agent handler", () => {
               },
             };
             mockSessionResetSuccess({ reason: "new" });
-            mocks.performGatewaySessionReset.mockClear();
-            const agentCallsBefore = mocks.agentCommand.mock.calls.length;
+            mocks.loadSessionEntry.mockReturnValue({
+              cfg: mocks.loadConfigReturn,
+              storePath: "/tmp/sessions.json",
+              entry: {
+                sessionId: "reset-session-id",
+                updatedAt: Date.now(),
+                spawnedBy: "agent:main:controller",
+                spawnedWorkspaceDir,
+              },
+              canonicalKey: "agent:main:main",
+            });
+            mocks.updateSessionStore.mockResolvedValue(undefined);
+            mocks.agentCommand.mockResolvedValue({
+              payloads: [{ text: "ok" }],
+              meta: { durationMs: 100 },
+            });
 
             await invokeAgent(
               {
@@ -1164,15 +1238,20 @@ describe("gateway agent handler", () => {
               },
             );
 
-            expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-            expect(mocks.agentCommand.mock.calls.length).toBe(agentCallsBefore);
+            await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+            const call = readLastAgentCommandCall();
+            expect(call?.message).toContain("while bootstrap is still pending for this workspace");
+            expect(call?.message).toContain(
+              "cannot safely complete the full BOOTSTRAP.md workflow here",
+            );
+            expect(call?.message).toContain("switching to a primary interactive run");
           },
         );
       },
     );
   });
 
-  it("does not dispatch an agent run for bare /new on subagent sessions", async () => {
+  it("suppresses full bootstrap wording for bare /new on subagent sessions", async () => {
     await withTempDir({ prefix: "openclaw-gateway-reset-subagent-" }, async (workspaceDir) => {
       await fs.writeFile(`${workspaceDir}/BOOTSTRAP.md`, "bootstrap ritual", "utf-8");
       mocks.loadConfigReturn = {
@@ -1186,8 +1265,20 @@ describe("gateway agent handler", () => {
         reason: "new",
         key: "agent:main:subagent:worker",
       });
-      mocks.performGatewaySessionReset.mockClear();
-      const agentCallsBefore = mocks.agentCommand.mock.calls.length;
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: mocks.loadConfigReturn,
+        storePath: "/tmp/sessions.json",
+        entry: {
+          sessionId: "reset-session-id",
+          updatedAt: Date.now(),
+        },
+        canonicalKey: "agent:main:subagent:worker",
+      });
+      mocks.updateSessionStore.mockResolvedValue(undefined);
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
 
       await invokeAgent(
         {
@@ -1201,8 +1292,10 @@ describe("gateway agent handler", () => {
         },
       );
 
-      expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-      expect(mocks.agentCommand.mock.calls.length).toBe(agentCallsBefore);
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+      const call = readLastAgentCommandCall();
+      expect(call?.message).toContain("Execute your Session Startup sequence now");
+      expect(call?.message).not.toContain("while bootstrap is still pending for this workspace");
     });
   });
 
@@ -1233,7 +1326,7 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
-  it("does not dispatch an agent run for bare /new with model override", async () => {
+  it("uses request model override when resolving bare /new bootstrap file access", async () => {
     await withTempDir(
       { prefix: "openclaw-gateway-reset-model-override-" },
       async (workspaceDir) => {
@@ -1246,9 +1339,7 @@ describe("gateway agent handler", () => {
           },
         };
         mockSessionResetSuccess({ reason: "new" });
-        mocks.performGatewaySessionReset.mockClear();
         primeMainAgentRun({ sessionId: "reset-session-id", cfg: mocks.loadConfigReturn });
-        const agentCallsBefore = mocks.agentCommand.mock.calls.length;
 
         await invokeAgent(
           {
@@ -1267,8 +1358,15 @@ describe("gateway agent handler", () => {
           },
         );
 
-        expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-        expect(mocks.agentCommand.mock.calls.length).toBe(agentCallsBefore);
+        await waitForAssertion(() =>
+          expect(mocks.resolveBareResetBootstrapFileAccess).toHaveBeenCalled(),
+        );
+        expect(mocks.resolveBareResetBootstrapFileAccess).toHaveBeenCalledWith(
+          expect.objectContaining({
+            modelProvider: "openai",
+            modelId: "gpt-5.4-mini",
+          }),
+        );
       },
     );
   });
