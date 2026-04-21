@@ -562,6 +562,46 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("keeps same-provider fallbacks reachable when configured primary is stale", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "github-copilot/gpt-4o",
+            fallbacks: ["github-copilot/claude-sonnet-4.6"],
+          },
+        },
+      },
+    });
+
+    const unsupportedModelError = new Error(
+      '400 {"error":{"message":"The requested model is not supported.","code":"model_not_supported","param":"model","type":"invalid_request_error"}}',
+    );
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      if (provider === "github-copilot" && model === "claude-opus-4.6") {
+        throw unsupportedModelError;
+      }
+      if (provider === "github-copilot" && model === "claude-sonnet-4.6") {
+        return "ok";
+      }
+      throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "github-copilot",
+      model: "claude-opus-4.6",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      ["github-copilot", "claude-opus-4.6"],
+      ["github-copilot", "claude-sonnet-4.6"],
+    ]);
+    expect(result.attempts[0]?.reason).toBe("model_not_found");
+  });
+
   it("treats normalized default refs as primary and keeps configured fallback chain", async () => {
     const cfg = makeCfg({
       agents: {

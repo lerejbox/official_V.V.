@@ -407,25 +407,36 @@ function resolveFallbackCandidates(params: {
 
   addExplicitCandidate(normalizedPrimary);
 
+  const configuredFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
+  const resolvedConfiguredFallbacks = configuredFallbacks
+    .map((raw) =>
+      resolveModelRefFromString({
+        raw,
+        defaultProvider,
+        aliasIndex,
+      }),
+    )
+    .filter((resolved): resolved is NonNullable<typeof resolved> => Boolean(resolved));
+
   const modelFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {
       return params.fallbacksOverride;
     }
-    const configuredFallbacks = resolveAgentModelFallbackValues(
-      params.cfg?.agents?.defaults?.model,
-    );
     // When user runs a different provider than config, only use configured fallbacks
     // if the current model is already in that chain (e.g. session on first fallback).
     if (normalizedPrimary.provider !== configuredPrimary.provider) {
-      const isConfiguredFallback = configuredFallbacks.some((raw) => {
-        const resolved = resolveModelRefFromString({
-          raw,
-          defaultProvider,
-          aliasIndex,
-        });
-        return resolved ? sameModelCandidate(resolved.ref, normalizedPrimary) : false;
-      });
-      return isConfiguredFallback ? configuredFallbacks : [];
+      const isConfiguredFallback = resolvedConfiguredFallbacks.some((resolved) =>
+        sameModelCandidate(resolved.ref, normalizedPrimary),
+      );
+      // If the configured primary is stale/invalid and can't be resolved, keep the same-provider
+      // configured fallback chain reachable for current-session overrides instead of collapsing
+      // to a single candidate.
+      const sharesFallbackProvider =
+        !primary &&
+        resolvedConfiguredFallbacks.some(
+          (resolved) => resolved.ref.provider === normalizedPrimary.provider,
+        );
+      return isConfiguredFallback || sharesFallbackProvider ? configuredFallbacks : [];
     }
     // Same provider: always use full fallback chain (model version differences within provider).
     return configuredFallbacks;

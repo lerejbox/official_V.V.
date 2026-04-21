@@ -30,6 +30,16 @@ describe("live model error helpers", () => {
     ).toBe(true);
     expect(
       isModelNotFoundErrorMessage(
+        '400 {"error":{"message":"The requested model is not supported.","code":"model_not_supported","param":"model","type":"invalid_request_error"}}',
+      ),
+    ).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
+        "400 building HTTP client: selecting model endpoint: scheduler enqueue for model endpoint selection: no model endpoints available given user constraints",
+      ),
+    ).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
         "The endpoint has been deprecated. Transition to v2 API for continued access.",
       ),
     ).toBe(false);

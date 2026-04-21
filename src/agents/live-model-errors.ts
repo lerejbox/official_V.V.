@@ -3,6 +3,18 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (!msg) {
     return false;
   }
+  if (/model_not_supported/i.test(msg)) {
+    return true;
+  }
+  if (/requested model is not supported/i.test(msg)) {
+    return true;
+  }
+  if (/no model endpoints available given user constraints/i.test(msg)) {
+    return true;
+  }
+  if (/selecting model endpoint/i.test(msg) && /no model endpoints available/i.test(msg)) {
+    return true;
+  }
   if (/no endpoints found for/i.test(msg)) {
     return true;
   }
