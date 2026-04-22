@@ -76,6 +76,17 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    expect(
+      detectChangedScope(["apps/macos-mlx-tts/Sources/OpenClawMLXTTSHelper/main.swift"]),
+    ).toEqual({
+      runNode: false,
+      runMacos: true,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
     expect(detectChangedScope(["apps/shared/OpenClawKit/Sources/Foo.swift"])).toEqual({
       runNode: false,
       runMacos: true,
@@ -159,13 +170,13 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("runs platform lanes when the CI workflow changes", () => {
+  it("keeps native platform lanes scoped when the CI workflow changes", () => {
     expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
       runNode: true,
-      runMacos: true,
-      runAndroid: true,
+      runMacos: false,
+      runAndroid: false,
       runWindows: true,
-      runSkillsPython: true,
+      runSkillsPython: false,
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
