@@ -339,6 +339,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       idempotencyKey: string;
       timeout?: number;
       bestEffortDeliver?: boolean;
+      cleanupBundleMcpOnRunEnd?: boolean;
       label?: string;
       inputProvenance?: InputProvenance;
     };
@@ -896,6 +897,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         messageChannel: originMessageChannel,
         runId,
         lane: request.lane,
+        cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd === true,
         extraSystemPrompt: request.extraSystemPrompt,
         bootstrapContextMode: request.bootstrapContextMode,
         bootstrapContextRunKind: request.bootstrapContextRunKind,

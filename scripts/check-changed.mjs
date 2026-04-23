@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import {
   detectChangedLanes,
@@ -8,6 +7,7 @@ import {
 } from "./changed-lanes.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
+import { runManagedCommand } from "./lib/managed-child-process.mjs";
 import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 
 export function createChangedCheckPlan(result, options = {}) {
@@ -145,9 +145,9 @@ export async function runChangedCheck(result, options = {}) {
     }
   } else if (plan.runChangedTestsBroad) {
     const testArgs = options.explicitPaths
-      ? ["scripts/test-projects.mjs"]
-      : ["scripts/test-projects.mjs", "--changed", options.base ?? "origin/main"];
-    const status = await runNode(
+      ? ["test"]
+      : ["test", "--changed", options.base ?? "origin/main"];
+    const status = await runPnpm(
       {
         name: options.explicitPaths ? "tests all" : "tests changed broad",
         args: testArgs,
@@ -159,10 +159,10 @@ export async function runChangedCheck(result, options = {}) {
       return status;
     }
   } else if (plan.testTargets.length > 0) {
-    const status = await runNode(
+    const status = await runPnpm(
       {
         name: "tests changed",
-        args: ["scripts/test-projects.mjs", ...plan.testTargets],
+        args: ["test", ...plan.testTargets],
       },
       timings,
     );
@@ -209,38 +209,25 @@ async function runPnpm(command, timings) {
   return await runCommand({ ...command, bin: "pnpm" }, timings);
 }
 
-async function runNode(command, timings) {
-  return await runCommand({ ...command, bin: process.execPath }, timings);
-}
-
 async function runCommand(command, timings) {
   const startedAt = performance.now();
   console.error(`\n[check:changed] ${command.name}`);
-  const child = spawn(command.bin, command.args, {
-    stdio: "inherit",
-    shell: process.platform === "win32",
-  });
+  let status = 1;
+  try {
+    status = await runManagedCommand({
+      bin: command.bin,
+      args: command.args,
+    });
+  } catch (error) {
+    console.error(error);
+  }
 
-  return await new Promise((resolve) => {
-    child.once("error", (error) => {
-      console.error(error);
-      timings.push({
-        name: command.name,
-        durationMs: performance.now() - startedAt,
-        status: 1,
-      });
-      resolve(1);
-    });
-    child.once("close", (status) => {
-      const resolvedStatus = status ?? 1;
-      timings.push({
-        name: command.name,
-        durationMs: performance.now() - startedAt,
-        status: resolvedStatus,
-      });
-      resolve(resolvedStatus);
-    });
+  timings.push({
+    name: command.name,
+    durationMs: performance.now() - startedAt,
+    status,
   });
+  return status;
 }
 
 function printSummary(timings, options) {

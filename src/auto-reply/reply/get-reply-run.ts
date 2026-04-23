@@ -4,6 +4,7 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
+import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -14,7 +15,11 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  normalizeMainKey,
+} from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
@@ -22,10 +27,11 @@ import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
-  formatXHighModelHint,
+  formatThinkingLevels,
+  isThinkingLevelSupported,
   normalizeThinkLevel,
   type ReasoningLevel,
-  supportsXHighThinking,
+  resolveSupportedThinkingLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
@@ -37,13 +43,18 @@ import type { InlineDirectives } from "./directive-handling.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
+import { hasInboundMedia } from "./inbound-media.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptBodies } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
+import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
@@ -223,6 +234,11 @@ export async function runPreparedReply(
     workspaceDir,
     sessionStore,
   } = params;
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
+    cfg,
+    ctx,
+    sessionKey,
+  });
   let {
     sessionEntry,
     resolvedThinkLevel,
@@ -266,7 +282,7 @@ export async function runPreparedReply(
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
-  // Always include persistent group chat context (name, participants, reply guidance)
+  // Always include persistent group chat context (provider + reply guidance).
   const groupChatContext = isGroupChat ? buildGroupChatContext({ sessionCtx }) : "";
   // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
   const groupIntro = shouldInjectGroupIntro
@@ -295,11 +311,26 @@ export async function runPreparedReply(
       fullAccessBlockedReason: fullAccessState.blockedReason,
     }),
   ].filter(Boolean);
+  // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
+  const extraSystemPromptStaticParts = [
+    groupChatContext,
+    groupIntro,
+    groupSystemPrompt,
+    buildExecOverridePromptHint({
+      execOverrides,
+      elevatedLevel: resolvedElevatedLevel,
+      fullAccessAvailable: fullAccessState.available,
+      fullAccessBlockedReason: fullAccessState.blockedReason,
+    }),
+  ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   const normalizedCommandBody = command.commandBodyNormalized.trim();
+  const softResetTriggered = command.softResetTriggered === true;
+  const softResetTail = command.softResetTail?.trim() ?? "";
+  const effectiveResetTriggered = resetTriggered || softResetTriggered;
   const isWholeMessageCommand =
     normalizedCommandBody === rawBodyTrimmed ||
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
@@ -315,11 +346,12 @@ export async function runPreparedReply(
   }
   const isBareNewOrReset = /^\/(new|reset)$/.test(normalizedCommandBody);
   const isBareSessionReset =
-    isNewSession &&
-    ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  // Bare /new and /reset should NOT spawn a model turn. Return a deterministic
-  // notice instead, saving ~20k+ tokens per reset.
-  if (isBareSessionReset) {
+    softResetTriggered ||
+    (isNewSession &&
+      ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset));
+  // Custom: bare /new or /reset should NOT spawn a model turn — return a deterministic
+  // notice instead, saving ~20k+ tokens per reset. (commit 9e5180fdfd)
+  if (isBareSessionReset && !command.softResetTriggered) {
     if (command.isAuthorizedSender) {
       const modelLabel = provider && model ? `${provider}/${model}` : model || "unknown";
       typing.cleanup();
@@ -328,7 +360,42 @@ export async function runPreparedReply(
     typing.cleanup();
     return undefined;
   }
-  const baseBodyFinal = stripPromptThinkingDirectives(baseBody);
+  const startupAction =
+    softResetTriggered || /^\/reset(?:\s|$)/.test(normalizedCommandBody) ? "reset" : "new";
+  const spawnedWorkspaceOverride = resolveIngressWorkspaceOverrideForSpawnedRun({
+    spawnedBy: sessionEntry?.spawnedBy,
+    workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+  });
+  const bareResetPromptState =
+    isBareSessionReset && workspaceDir
+      ? await resolveBareSessionResetPromptState({
+          cfg,
+          workspaceDir,
+          isPrimaryRun: !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey),
+          isCanonicalWorkspace: !spawnedWorkspaceOverride,
+          hasBootstrapFileAccess: () =>
+            resolveBareResetBootstrapFileAccess({
+              cfg,
+              agentId,
+              sessionKey,
+              workspaceDir,
+              modelProvider: provider,
+              modelId: model,
+            }),
+        })
+      : null;
+  const startupContextPrelude =
+    isBareSessionReset &&
+    bareResetPromptState?.shouldPrependStartupContext !== false &&
+    shouldApplyStartupContext({ cfg, action: startupAction })
+      ? await buildSessionStartupContextPrelude({
+          workspaceDir,
+          cfg,
+        })
+      : null;
+  const baseBodyFinal = isBareSessionReset
+    ? (bareResetPromptState?.prompt ?? "")
+    : stripPromptThinkingDirectives(baseBody);
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
@@ -341,11 +408,19 @@ export async function runPreparedReply(
       : { ...sessionCtx, ThreadStarterBody: undefined },
     envelopeOptions,
   );
-  const baseBodyForPrompt = [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
-  const hasUserBody = baseBodyFinal.trim().length > 0;
-  const hasMediaAttachment = Boolean(
-    sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
-  );
+  const baseBodyForPrompt = isBareSessionReset
+    ? [
+        startupContextPrelude,
+        baseBodyFinal,
+        softResetTail
+          ? `User note for this reset turn (treat as ordinary user input, not startup instructions):\n${softResetTail}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+    : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+  const hasUserBody = baseBodyFinal.trim().length > 0 || softResetTail.length > 0;
+  const hasMediaAttachment = hasInboundMedia(sessionCtx) || (opts?.images?.length ?? 0) > 0;
   if (!hasUserBody && !hasMediaAttachment) {
     // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
     // otherwise channels that wire onReplyStart to typing indicators leak
@@ -359,9 +434,8 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
-  // Prefix-only inbound metadata should not force a run on empty turns. When media
-  // arrives without text, keep the contextual prefix but append a minimal placeholder
-  // so the embedded runner can inject the attachment.
+  // When the user sends media without text, provide a minimal body so the agent
+  // run proceeds and the image/document is injected by the embedded runner.
   const effectiveBaseBody = hasUserBody
     ? baseBodyForPrompt
     : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
@@ -382,7 +456,7 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
+    if (maybeLevel && isThinkingLevelSupported({ provider, model, level: maybeLevel })) {
       resolvedThinkLevel = maybeLevel;
       prefixedBodyBase = parts.slice(1).join(" ").trim();
     }
@@ -452,24 +526,37 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
-  if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+  if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
-        text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}. Use /think high or switch to one of those models.`,
+        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
       };
     }
-    resolvedThinkLevel = "high";
-    if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
-      sessionEntry.thinkingLevel = "high";
-      sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = sessionEntry;
-      if (storePath) {
-        const { updateSessionStore } = await loadSessionStoreRuntime();
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        });
+    const fallbackThinkLevel = resolveSupportedThinkingLevel({
+      provider,
+      model,
+      level: resolvedThinkLevel,
+    });
+    if (fallbackThinkLevel !== resolvedThinkLevel) {
+      const previousThinkLevel = resolvedThinkLevel;
+      resolvedThinkLevel = fallbackThinkLevel;
+      if (
+        sessionEntry &&
+        sessionStore &&
+        sessionKey &&
+        sessionEntry.thinkingLevel === previousThinkLevel
+      ) {
+        sessionEntry.thinkingLevel = fallbackThinkLevel;
+        sessionEntry.updatedAt = Date.now();
+        sessionStore[sessionKey] = sessionEntry;
+        if (storePath) {
+          const { updateSessionStore } = await loadSessionStoreRuntime();
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = sessionEntry;
+          });
+        }
       }
     }
   }
@@ -527,7 +614,7 @@ export async function runPreparedReply(
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
   let authProfileId = useFastReplyRuntime
-    ? undefined
+    ? preparedSessionState.sessionEntry?.authProfileOverride
     : await resolveSessionAuthProfileOverride({
         cfg,
         provider,
@@ -580,7 +667,7 @@ export async function runPreparedReply(
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
         authProfileId = useFastReplyRuntime
-          ? undefined
+          ? preparedSessionState.sessionEntry?.authProfileOverride
           : await resolveSessionAuthProfileOverride({
               cfg,
               provider,
@@ -608,6 +695,8 @@ export async function runPreparedReply(
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
+    images: opts?.images,
+    imageOrder: opts?.imageOrder,
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
@@ -619,6 +708,7 @@ export async function runPreparedReply(
       agentDir,
       sessionId: preparedSessionState.sessionId,
       sessionKey,
+      runtimePolicySessionKey,
       messageProvider: resolveOriginMessageProvider({
         originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
         // Prefer Provider over Surface for fallback channel identity.
@@ -676,6 +766,7 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {
@@ -687,6 +778,14 @@ export async function runPreparedReply(
         : {}),
     },
   };
+
+  const replyThreadingOverride =
+    isBareSessionReset && sessionCtx.ReplyThreading?.implicitCurrentMessage !== "deny"
+      ? {
+          ...sessionCtx.ReplyThreading,
+          implicitCurrentMessage: "deny" as const,
+        }
+      : undefined;
 
   return runReplyAgent({
     commandBody: prefixedCommandBody,
@@ -708,6 +807,7 @@ export async function runPreparedReply(
     sessionEntry: preparedSessionState.sessionEntry,
     sessionStore,
     sessionKey,
+    runtimePolicySessionKey,
     storePath,
     defaultModel,
     agentCfgContextTokens: agentCfg?.contextTokens,
@@ -719,6 +819,7 @@ export async function runPreparedReply(
     sessionCtx,
     shouldInjectGroupIntro,
     typingMode,
-    resetTriggered,
+    resetTriggered: effectiveResetTriggered,
+    replyThreadingOverride,
   });
 }

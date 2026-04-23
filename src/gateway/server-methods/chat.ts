@@ -13,6 +13,8 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
+import { logLargePayload } from "../../logging/diagnostic-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -369,6 +371,26 @@ function resolveChatSendOriginatingRoute(params: {
   };
 }
 
+function isAcpSessionKey(sessionKey: string | undefined): boolean {
+  return Boolean(sessionKey?.split(":").includes("acp"));
+}
+
+function explicitOriginTargetsAcpSession(origin: ChatSendExplicitOrigin | undefined): boolean {
+  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
+    return false;
+  }
+  const channel = normalizeMessageChannel(origin.originatingChannel);
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return false;
+  }
+  const binding = getSessionBindingService().resolveByConversation({
+    channel,
+    accountId: origin.accountId,
+    conversationId: origin.originatingTo,
+  });
+  return isAcpSessionKey(binding?.targetSessionKey);
+}
+
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
   for (const char of message) {
@@ -699,6 +721,17 @@ function sanitizeChatHistoryContentBlock(
     entry.omitted = true;
     entry.bytes = bytes;
     changed = true;
+  }
+  if (type === "audio" && entry.source && typeof entry.source === "object") {
+    const source = { ...(entry.source as Record<string, unknown>) };
+    if (source.type === "base64" && typeof source.data === "string") {
+      const bytes = Buffer.byteLength(source.data, "utf8");
+      delete source.data;
+      source.omitted = true;
+      source.bytes = bytes;
+      entry.source = source;
+      changed = true;
+    }
   }
   return { block: changed ? entry : block, changed };
 }
@@ -1658,6 +1691,14 @@ export const chatHandlers: GatewayRequestHandlers = {
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
+      logLargePayload({
+        surface: "gateway.chat.history",
+        action: "truncated",
+        bytes: jsonUtf8Bytes(normalized),
+        limitBytes: maxHistoryBytes,
+        count: placeholderCount,
+        reason: "chat_history_budget",
+      });
       context.logGateway.debug(
         `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
       );
@@ -1929,11 +1970,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     if (normalizedAttachments.length > 0) {
       const modelRef = resolveSessionModelRef(cfg, entry, agentId);
-      const supportsImages = await resolveGatewayModelSupportsImages({
+      const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         provider: modelRef.provider,
         model: modelRef.model,
       });
+      const supportsImages =
+        supportsSessionModelImages || explicitOriginTargetsAcpSession(explicitOriginResult.value);
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
           maxBytes: 5_000_000,
