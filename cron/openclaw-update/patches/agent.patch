@@ -1,0 +1,198 @@
+diff --git a/src/gateway/server-methods/agent.ts b/src/gateway/server-methods/agent.ts
+index 47d6c105d6..f75662f3a1 100644
+--- a/src/gateway/server-methods/agent.ts
++++ b/src/gateway/server-methods/agent.ts
+@@ -6,14 +6,7 @@ import {
+   resolveIngressWorkspaceOverrideForSpawnedRun,
+ } from "../../agents/spawned-context.js";
+ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+-import {
+-  resolveBareResetBootstrapFileAccess,
+-  resolveBareSessionResetPromptState,
+-} from "../../auto-reply/reply/session-reset-prompt.js";
+-import {
+-  buildSessionStartupContextPrelude,
+-  shouldApplyStartupContext,
+-} from "../../auto-reply/reply/startup-context.js";
++import { buildSessionStartupContextPrelude } from "../../auto-reply/reply/startup-context.js";
+ import { agentCommandFromIngress } from "../../commands/agent.js";
+ import { loadConfig } from "../../config/config.js";
+ import {
+@@ -33,12 +26,7 @@ import {
+ import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
+ import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+ import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+-import {
+-  classifySessionKeyShape,
+-  isAcpSessionKey,
+-  isSubagentSessionKey,
+-  normalizeAgentId,
+-} from "../../routing/session-key.js";
++import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
+ import { defaultRuntime } from "../../runtime.js";
+ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
+ import { resolveSendPolicy } from "../../sessions/send-policy.js";
+@@ -545,6 +533,7 @@ export const agentHandlers: GatewayRequestHandlers = {
+     let isNewSession = false;
+     let skipTimestampInjection = false;
+     let shouldPrependStartupContext = false;
++    let skipDispatch = false;
+ 
+     const resetCommandMatch = message.match(RESET_COMMAND_RE);
+     if (resetCommandMatch && requestedSessionKey) {
+@@ -572,54 +561,11 @@ export const agentHandlers: GatewayRequestHandlers = {
+       if (postResetMessage) {
+         message = postResetMessage;
+       } else {
+-        const resetLoadedSession = loadSessionEntry(requestedSessionKey);
+-        const resetCfg = resetLoadedSession?.cfg ?? cfg;
+-        const resetSessionEntry = resetLoadedSession?.entry;
+-        const resetSpawnedBy = canonicalizeSpawnedByForAgent(
+-          resetCfg,
+-          resolveAgentIdFromSessionKey(requestedSessionKey),
+-          resetSessionEntry?.spawnedBy,
+-        );
+-        const { runtimeWorkspaceDir, isCanonicalWorkspace } = resolveSessionRuntimeWorkspace({
+-          cfg: resetCfg,
+-          sessionKey: requestedSessionKey,
+-          sessionEntry: resetSessionEntry,
+-          spawnedBy: resetSpawnedBy,
+-        });
+-        const resetSessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKey);
+-        const resetBaseModelRef = resolveSessionModelRef(
+-          resetCfg,
+-          resetSessionEntry,
+-          resetSessionAgentId,
+-        );
+-        const resetEffectiveModelRef = {
+-          provider: providerOverride || resetBaseModelRef.provider,
+-          model: modelOverride || resetBaseModelRef.model,
+-        };
+-        const bareResetPromptState = await resolveBareSessionResetPromptState({
+-          cfg: resetCfg,
+-          workspaceDir: runtimeWorkspaceDir,
+-          isPrimaryRun:
+-            !isSubagentSessionKey(requestedSessionKey) && !isAcpSessionKey(requestedSessionKey),
+-          isCanonicalWorkspace,
+-          hasBootstrapFileAccess: resolveBareResetBootstrapFileAccess({
+-            cfg: resetCfg,
+-            agentId: resetSessionAgentId,
+-            sessionKey: requestedSessionKey,
+-            workspaceDir: runtimeWorkspaceDir,
+-            modelProvider: resetEffectiveModelRef.provider,
+-            modelId: resetEffectiveModelRef.model,
+-          }),
+-        });
+-        // Keep bare /new and /reset behavior aligned with chat.send:
+-        // reset first, then run a fresh-session greeting prompt in-place.
+-        // Date is embedded in the prompt so agents read the correct daily
+-        // memory files; skip further timestamp injection to avoid duplication.
+-        message = bareResetPromptState.prompt;
++        // Bare /new and /reset should reset the conversation without spending
++        // a model turn on an auto-greeting. Skip the dispatch entirely.
++        message = "";
+         skipTimestampInjection = true;
+-        shouldPrependStartupContext =
+-          bareResetPromptState.shouldPrependStartupContext &&
+-          shouldApplyStartupContext({ cfg, action: resetReason });
++        skipDispatch = true;
+       }
+     }
+ 
+@@ -915,51 +861,61 @@ export const agentHandlers: GatewayRequestHandlers = {
+     });
+     respond(true, accepted, undefined, { runId });
+ 
+-    let dispatched = false;
+-    try {
+-      if (resolvedSessionKey) {
++    if (resolvedSessionKey) {
++      try {
+         await reactivateCompletedSubagentSession({
+           sessionKey: resolvedSessionKey,
+           runId,
+         });
++      } catch (err) {
++        activeRunAbort.cleanup();
++        throw err;
+       }
++    }
+ 
+-      if (requestedSessionKey && resolvedSessionKey && isNewSession) {
+-        emitSessionsChanged(context, {
+-          sessionKey: resolvedSessionKey,
+-          reason: "create",
+-        });
+-      }
+-      if (resolvedSessionKey) {
+-        emitSessionsChanged(context, {
+-          sessionKey: resolvedSessionKey,
+-          reason: "send",
+-        });
+-      }
++    if (requestedSessionKey && resolvedSessionKey && isNewSession) {
++      emitSessionsChanged(context, {
++        sessionKey: resolvedSessionKey,
++        reason: "create",
++      });
++    }
++    if (resolvedSessionKey) {
++      emitSessionsChanged(context, {
++        sessionKey: resolvedSessionKey,
++        reason: "send",
++      });
++    }
+ 
+-      if (shouldPrependStartupContext && resolvedSessionKey) {
+-        const { runtimeWorkspaceDir } = resolveSessionRuntimeWorkspace({
+-          cfg: cfgForAgent ?? cfg,
+-          sessionKey: resolvedSessionKey,
+-          sessionEntry,
+-          spawnedBy: spawnedByValue,
+-        });
+-        const startupContextPrelude = await buildSessionStartupContextPrelude({
+-          workspaceDir: runtimeWorkspaceDir,
+-          cfg: cfgForAgent ?? cfg,
+-        });
+-        if (startupContextPrelude) {
+-          message = `${startupContextPrelude}\n\n${message}`;
+-        }
++    if (shouldPrependStartupContext && resolvedSessionKey) {
++      const { runtimeWorkspaceDir } = resolveSessionRuntimeWorkspace({
++        cfg: cfgForAgent ?? cfg,
++        sessionKey: resolvedSessionKey,
++        sessionEntry,
++        spawnedBy: spawnedByValue,
++      });
++      const startupContextPrelude = await buildSessionStartupContextPrelude({
++        workspaceDir: runtimeWorkspaceDir,
++        cfg: cfgForAgent ?? cfg,
++      });
++      if (startupContextPrelude) {
++        message = `${startupContextPrelude}\n\n${message}`;
+       }
++    }
+ 
+-      const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+-      const ingressAgentId =
+-        agentId &&
+-        (!resolvedSessionKey || resolveAgentIdFromSessionKey(resolvedSessionKey) === agentId)
+-          ? agentId
+-          : undefined;
++    const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
++    const ingressAgentId =
++      agentId &&
++      (!resolvedSessionKey || resolveAgentIdFromSessionKey(resolvedSessionKey) === agentId)
++        ? agentId
++        : undefined;
+ 
++    if (skipDispatch) {
++      activeRunAbort.cleanup();
++      return;
++    }
++
++    let dispatched = false;
++    try {
+       dispatchAgentRunFromGateway({
+         ingressOpts: {
+           message,
