@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -13,6 +14,10 @@ const SYNC_SUPPORT_FILES = [
   {
     source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
     target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "lib", "mintlify-accordion.mjs"),
+    target: path.join(".openclaw-sync", "lib", "mintlify-accordion.mjs"),
   },
   {
     source: path.join(ROOT, ".github", "codex", "prompts", "docs-mdx-repair.md"),
@@ -167,6 +172,28 @@ function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
+function walkMarkdownFiles(entryPath, out = []) {
+  if (!fs.existsSync(entryPath)) {
+    return out;
+  }
+
+  const stat = fs.statSync(entryPath);
+  if (stat.isFile()) {
+    if (/\.mdx?$/i.test(entryPath)) {
+      out.push(entryPath);
+    }
+    return out;
+  }
+
+  for (const entry of fs.readdirSync(entryPath, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".git") {
+      continue;
+    }
+    walkMarkdownFiles(path.join(entryPath, entry.name), out);
+  }
+  return out;
+}
+
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -262,6 +289,26 @@ function composeDocsConfig() {
   };
 }
 
+function repairGeneratedLocaleDocs(targetDocsDir) {
+  let repaired = 0;
+  for (const locale of GENERATED_LOCALES) {
+    const localeDir = path.join(targetDocsDir, locale.dir);
+    for (const filePath of walkMarkdownFiles(localeDir)) {
+      const raw = fs.readFileSync(filePath, "utf8");
+      const repairedRaw = repairMintlifyAccordionIndentation(raw);
+      if (repairedRaw === raw) {
+        continue;
+      }
+      fs.writeFileSync(filePath, repairedRaw);
+      repaired += 1;
+    }
+  }
+
+  if (repaired > 0) {
+    console.log(`Repaired Mintlify accordion indentation in ${repaired} generated locale doc(s).`);
+  }
+}
+
 function syncDocsTree(targetRoot) {
   const targetDocsDir = path.join(targetRoot, "docs");
   ensureDir(targetDocsDir);
@@ -298,6 +345,7 @@ function syncDocsTree(targetRoot) {
     }
   }
 
+  repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
 }
 

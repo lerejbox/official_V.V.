@@ -12,6 +12,7 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../subagent-spawn.js", () => ({
+  SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
 }));
@@ -220,6 +221,7 @@ describe("sessions_spawn tool", () => {
       task: "investigate the failing CI run",
       agentId: "codex",
       cwd: "/workspace",
+      runTimeoutSeconds: 45,
       thread: true,
       mode: "session",
       streamTo: "parent",
@@ -235,6 +237,7 @@ describe("sessions_spawn tool", () => {
         task: "investigate the failing CI run",
         agentId: "codex",
         cwd: "/workspace",
+        runTimeoutSeconds: 45,
         thread: true,
         mode: "session",
         streamTo: "parent",

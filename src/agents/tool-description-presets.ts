@@ -33,9 +33,11 @@ export function describeSessionsSendTool(): string {
 
 export function describeSessionsSpawnTool(): string {
   return [
-    'Spawn an isolated session with `runtime="subagent"` or `runtime="acp"`.',
+    'Spawn a clean isolated session by default with `runtime="subagent"` or `runtime="acp"`.',
     '`mode="run"` is one-shot and `mode="session"` is persistent or thread-bound.',
     "Subagents inherit the parent workspace directory automatically.",
+    '`runtime="acp"` is for external ACP harness ids such as codex, claude, gemini, or opencode, or agents configured with `agents.list[].runtime.type="acp"`.',
+    'For native subagents only, set `context="fork"` when the child needs the current transcript context; otherwise omit it or use `context="isolated"`.',
     "Use this when the work should happen in a fresh child session instead of the current one.",
   ].join(" ");
 }
