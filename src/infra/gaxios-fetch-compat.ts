@@ -253,7 +253,7 @@ async function loadGaxiosConstructor(): Promise<GaxiosConstructor | null> {
 function installLegacyWindowFetchShim(): void {
   if (
     typeof globalThis.fetch !== "function" ||
-    (globalThis as Record<string, unknown>).window !== undefined
+    typeof (globalThis as Record<string, unknown>).window !== "undefined"
   ) {
     return;
   }

@@ -141,11 +141,11 @@ export async function processAttachments(
             log,
             prefix,
           );
-        }
+        } else {
           log?.info(`${prefix} Downloaded attachment to: ${localPath}`);
           return { localPath, type: "other" as const, filename: att.filename, meta };
-        
-      }
+        }
+      } else {
         log?.error(`${prefix} Failed to download: ${attUrl}`);
         if (att.content_type?.startsWith("image/")) {
           return {
@@ -163,15 +163,15 @@ export async function processAttachments(
             transcript: asrReferText,
             meta,
           };
-        }
+        } else {
           return {
             localPath: null,
             type: "other-fallback" as const,
             filename: att.filename ?? att.content_type,
             meta,
           };
-        
-      
+        }
+      }
     },
   );
 

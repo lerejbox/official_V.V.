@@ -161,13 +161,13 @@ export async function parseAndSendMediaTags(
     return { handled: false, normalizedText: text };
   }
 
-  const tagCounts = mediaTagMatches.reduce< Record<string, number>>(
+  const tagCounts = mediaTagMatches.reduce(
     (acc, m) => {
       const t = normalizeLowercaseStringOrEmpty(m[1]);
       acc[t] = (acc[t] ?? 0) + 1;
       return acc;
     },
-    {},
+    {} as Record<string, number>,
   );
   log?.info(
     `${prefix} Detected media tags: ${Object.entries(tagCounts)
@@ -460,7 +460,7 @@ function decodeMediaPath(raw: string, log: DeliverAccountContext["log"], prefix:
     if (!isWinLocal && (hasOctal || hasNonASCII)) {
       log?.debug?.(`${prefix} Decoding path with mixed encoding: ${mediaPath}`);
       let decoded = mediaPath.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) => {
-        return String.fromCharCode(Number.parseInt(octal, 8));
+        return String.fromCharCode(parseInt(octal, 8));
       });
       const bytes: number[] = [];
       for (let i = 0; i < decoded.length; i++) {

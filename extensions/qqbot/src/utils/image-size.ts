@@ -4,7 +4,7 @@
  * QQ Bot markdown images use `![#widthpx #heightpx](url)`.
  */
 
-import { Buffer } from "node:buffer";
+import { Buffer } from "buffer";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { debugLog } from "./debug-log.js";
@@ -251,7 +251,7 @@ export function hasQQBotImageSize(markdownImage: string): boolean {
 export function extractQQBotImageSize(markdownImage: string): ImageSize | null {
   const match = markdownImage.match(/!\[#(\d+)px\s+#(\d+)px\]/);
   if (match) {
-    return { width: Number.parseInt(match[1], 10), height: Number.parseInt(match[2], 10) };
+    return { width: parseInt(match[1], 10), height: parseInt(match[2], 10) };
   }
   return null;
 }

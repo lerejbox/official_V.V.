@@ -535,9 +535,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                 );
                 typing.keepAlive.start();
                 return notifyResponse.refIdx;
-              }
+              } else {
                 throw notifyErr;
-              
+              }
             }
           } catch (err) {
             log?.error(

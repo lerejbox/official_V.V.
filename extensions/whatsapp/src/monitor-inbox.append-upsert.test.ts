@@ -69,7 +69,7 @@ describe("append upsert handling (#20952)", () => {
         {
           key: { id: "nan-1", fromMe: false, remoteJid: "120363@g.us" },
           message: { conversation: "bad timestamp" },
-          messageTimestamp: Number.NaN,
+          messageTimestamp: NaN,
           pushName: "BadTs",
         },
       ],

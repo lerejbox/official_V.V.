@@ -343,7 +343,7 @@ async function apiRequestWithRetry<T = unknown>(
       }
 
       if (attempt < maxRetries) {
-        const delay = UPLOAD_BASE_DELAY_MS * 2 ** attempt;
+        const delay = UPLOAD_BASE_DELAY_MS * Math.pow(2, attempt);
         debugLog(
           `[qqbot-api] Upload attempt ${attempt + 1} failed, retrying in ${delay}ms: ${errMsg.slice(0, 100)}`,
         );
@@ -507,9 +507,9 @@ function buildProactiveMessageBody(appId: string, content: string): Record<strin
   }
   if (isMarkdownSupport(appId)) {
     return { markdown: { content }, msg_type: 2 };
-  }
+  } else {
     return { content, msg_type: 0 };
-  
+  }
 }
 
 export async function sendProactiveC2CMessage(
