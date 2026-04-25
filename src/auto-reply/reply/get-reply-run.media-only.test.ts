@@ -481,9 +481,11 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("does not send a standalone reset notice for reply-producing /new turns", async () => {
-    // resetTriggered=true with an actual body (not bare /new) — agent should run
+    // resetTriggered=true with an existing session (isNewSession=false) — agent should run
+    // and carry resetTriggered through to runReplyAgent.
     await runPreparedReply(
       baseParams({
+        isNewSession: false,
         resetTriggered: true,
       }),
     );
