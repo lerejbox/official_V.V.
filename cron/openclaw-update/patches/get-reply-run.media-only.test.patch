@@ -1,16 +1,8 @@
 diff --git a/src/auto-reply/reply/get-reply-run.media-only.test.ts b/src/auto-reply/reply/get-reply-run.media-only.test.ts
-index 51ef9e95a8..0999d21d10 100644
+index 51ef9e95a8..f9d2df63fb 100644
 --- a/src/auto-reply/reply/get-reply-run.media-only.test.ts
 +++ b/src/auto-reply/reply/get-reply-run.media-only.test.ts
-@@ -74,7 +74,6 @@ vi.mock("./body.js", () => ({
- }));
- 
- vi.mock("./groups.js", () => ({
--  buildDirectChatContext: vi.fn().mockReturnValue(""),
-   buildGroupIntro: vi.fn().mockReturnValue(""),
-   buildGroupChatContext: vi.fn().mockReturnValue(""),
- }));
-@@ -207,15 +206,6 @@ function baseParams(
+@@ -207,15 +207,6 @@ function baseParams(
    };
  }
  
@@ -26,7 +18,7 @@ index 51ef9e95a8..0999d21d10 100644
  describe("runPreparedReply media-only handling", () => {
    beforeAll(async () => {
      ({ runPreparedReply } = await import("./get-reply-run.js"));
-@@ -458,153 +448,50 @@ describe("runPreparedReply media-only handling", () => {
+@@ -458,153 +449,50 @@ describe("runPreparedReply media-only handling", () => {
      expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
    });
  
@@ -201,7 +193,7 @@ index 51ef9e95a8..0999d21d10 100644
      expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
    });
  
-@@ -919,10 +806,8 @@ describe("runPreparedReply media-only handling", () => {
+@@ -919,10 +807,8 @@ describe("runPreparedReply media-only handling", () => {
      const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
      expect(call?.commandBody).toContain("System: [t] Initial event.");
      expect(call?.commandBody).not.toContain("System: [t] Post-compaction context.");
@@ -212,7 +204,7 @@ index 51ef9e95a8..0999d21d10 100644
    });
    it("uses inbound origin channel for run messageProvider", async () => {
      await runPreparedReply(
-@@ -1045,7 +930,11 @@ describe("runPreparedReply media-only handling", () => {
+@@ -1045,7 +931,11 @@ describe("runPreparedReply media-only handling", () => {
      vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
        "System (untrusted): [t] External webhook payload.",
      );
@@ -225,7 +217,7 @@ index 51ef9e95a8..0999d21d10 100644
  
      await runPreparedReply(params);
  
-@@ -1055,7 +944,11 @@ describe("runPreparedReply media-only handling", () => {
+@@ -1055,7 +945,11 @@ describe("runPreparedReply media-only handling", () => {
  
    it("keeps sender ownership when drained system events are trusted", async () => {
      vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Trusted event.");
@@ -238,7 +230,7 @@ index 51ef9e95a8..0999d21d10 100644
  
      await runPreparedReply(params);
  
-@@ -1067,7 +960,11 @@ describe("runPreparedReply media-only handling", () => {
+@@ -1067,7 +961,11 @@ describe("runPreparedReply media-only handling", () => {
      vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
        "System: [t] Relay text mentions System (untrusted): but event is trusted.",
      );
