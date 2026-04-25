@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import * as path from "path";
+import * as path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -498,7 +498,7 @@ export async function sendPhoto(
         ctx.replyToId,
       );
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-    } else {
+    }
       // Channel messages only support public URLs through markdown.
       if (isHttp) {
         const r = await sendChannelMessage(token, ctx.targetId, `![](${mediaPath})`, ctx.replyToId);
@@ -506,7 +506,7 @@ export async function sendPhoto(
       }
       debugLog(`${prefix} sendPhoto: channel does not support local/Base64 images`);
       return { channel: "qqbot", error: "Channel does not support local/Base64 images" };
-    }
+    
   } catch (err) {
     const msg = formatErrorMessage(err);
 
@@ -593,10 +593,10 @@ export async function sendVoice(
             ctx.replyToId,
           );
           return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-        } else {
+        }
           debugLog(`${prefix} sendVoice: voice not supported in channel`);
           return { channel: "qqbot", error: "Voice not supported in channel" };
-        }
+        
       } catch (err) {
         const msg = formatErrorMessage(err);
         debugWarn(
@@ -695,10 +695,10 @@ async function sendVoiceFromLocal(
         ctx.replyToId,
       );
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-    } else {
+    }
       debugLog(`${prefix} sendVoice: voice not supported in channel`);
       return { channel: "qqbot", error: "Voice not supported in channel" };
-    }
+    
   } catch (err) {
     const msg = formatErrorMessage(err);
     debugError(`${prefix} sendVoice (local) failed: ${msg}`);
@@ -752,10 +752,10 @@ export async function sendVideoMsg(
           ctx.replyToId,
         );
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-      } else {
+      }
         debugLog(`${prefix} sendVideoMsg: video not supported in channel`);
         return { channel: "qqbot", error: "Video not supported in channel" };
-      }
+      
     }
 
     return await sendVideoFromLocal(ctx, mediaPath, prefix);
@@ -820,10 +820,10 @@ async function sendVideoFromLocal(
         ctx.replyToId,
       );
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-    } else {
+    }
       debugLog(`${prefix} sendVideoMsg: video not supported in channel`);
       return { channel: "qqbot", error: "Video not supported in channel" };
-    }
+    
   } catch (err) {
     const msg = formatErrorMessage(err);
     debugError(`${prefix} sendVideoMsg (local) failed: ${msg}`);
@@ -886,10 +886,10 @@ export async function sendDocument(
           fileName,
         );
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-      } else {
+      }
         debugLog(`${prefix} sendDocument: file not supported in channel`);
         return { channel: "qqbot", error: "File not supported in channel" };
-      }
+      
     }
 
     return await sendDocumentFromLocal(ctx, mediaPath, prefix);
@@ -959,10 +959,10 @@ async function sendDocumentFromLocal(
         fileName,
       );
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-    } else {
+    }
       debugLog(`${prefix} sendDocument: file not supported in channel`);
       return { channel: "qqbot", error: "File not supported in channel" };
-    }
+    
   } catch (err) {
     const msg = formatErrorMessage(err);
     debugError(`${prefix} sendDocument (local) failed: ${msg}`);
@@ -1088,7 +1088,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           debugLog(`[qqbot] sendText: Decoding path with mixed encoding: ${mediaPath}`);
 
           let decoded = mediaPath.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) => {
-            return String.fromCharCode(parseInt(octal, 8));
+            return String.fromCharCode(Number.parseInt(octal, 8));
           });
 
           const bytes: number[] = [];
@@ -1353,7 +1353,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         timestamp: result.timestamp,
         refIdx: result.ext_info?.ref_idx,
       };
-    } else {
+    }
       const result = await sendChannelMessage(accessToken, target.id, text, replyToId);
       recordMessageReply(replyToId);
       return {
@@ -1362,7 +1362,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         timestamp: result.timestamp,
         refIdx: getRefIdx(result),
       };
-    }
+    
   } catch (err) {
     const message = formatErrorMessage(err);
     return { channel: "qqbot", error: message };

@@ -81,9 +81,9 @@ export async function sendWithTokenRetry<T>(
       clearTokenCache(appId);
       const newToken = await getAccessToken(appId, clientSecret);
       return await sendFn(newToken);
-    } else {
-      throw err;
     }
+      throw err;
+    
   }
 }
 
